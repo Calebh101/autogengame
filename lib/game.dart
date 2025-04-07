@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'package:autogengame/class.dart';
+import 'package:autogengame/enum.dart';
 import 'package:flame/game.dart';
 import 'package:flame/components.dart';
 import 'package:flame/events.dart';
@@ -7,74 +9,133 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:localpkg/logger.dart';
 
-List<Block> blocks = [];
+List<Tile> tiles = [];
 double screenHeight = 0;
 late Offset offset;
 late Vector2 globalSize;
 
-void buildBlocks(List blocks, {required Canvas canvas, Offset? offset}) {
+void buildBlocks(List tiles, {required Canvas canvas, required MyGame game, Offset? offset}) {
   offset ??= Offset(0, 0);
+  if (offset.zoom <= 0) offset.zoom = 0.01;
 
-  for (Block block in blocks) {
-    double size = block.size * offset.zoom;
-    canvas.drawRect(Rect.fromLTWH((block.position.build().x - offset.x) * offset.zoom, (block.position.build().y + offset.y) * offset.zoom, size, size), Paint()..color = block.color);
+  for (Tile tile in tiles) {
+    double size = tile.size * offset.zoom;
+    if (tile is BlockTile) {
+      BlockTile block = tile;
+      canvas.drawRect(Rect.fromLTWH((block.position!.build().x - offset.x) * offset.zoom, (block.position!.build().y + offset.y) * offset.zoom, size, size), Paint()..color = block.color);
+    }
   }
 }
 
-List<Block> generateBlocks({int count = 2000, int minX = 0, int maxX = 100, int minY = 20, int maxY = 20, BlockPosition startingPosition = const BlockPosition(0, 0)}) {
-  List<Block> blocks = [];
-  List<BlockPosition> positionsTaken = [];
+Future<void> highlightTile(TilePosition position, {int? timeout = 5}) async {
+  tiles.add(BlockTile(position: position, color: Colors.grey));
+  if (timeout != null) {
+    await Future.delayed(Duration(seconds: timeout));
+    tiles.removeWhere(
+      (tile) => tile.position?.x == position.x && tile.position?.y == position.y,
+    );
+  }
+}
+
+Tile? lookupTile(double x, double y, {List<BlockIdentifier> identifiers = const [], bool highlight = true}) {
+  //if (highlight) highlightTile(TilePosition(x, y));
+
+  try {
+    Tile tile = tiles.firstWhere(
+      (tile) => tile.position?.x == x && tile.position?.y == y && identifiers.every((item) => tile.identifiers.contains(item)),
+    );
+    return tile;
+  } catch (e) {
+    return null;
+  }
+}
+
+List<Tile> generateBlocks({int count = 2000, TilePosition? startingPosition, int? seed, required MyGame game}) {
+  startingPosition ??= TilePosition(0, 0);
+  seed ??= Random().nextInt(4294967296);
+  print("generating tiles... (seed: $seed)");
+
+  List<Tile> tiles = [];
+  List<TilePosition> positionsTaken = [];
 
   double x = startingPosition.x;
   double y = startingPosition.y;
   int trajectory = 0;
+  int lastPit = 0;
+  int lastSpike = 0;
+  int lastPlatform = 0;
 
-  void addBlock(Block block) {
-    blocks.add(block);
-    positionsTaken.add(block.position);
+  void addTile(Tile block) {
+    tiles.add(block);
+    if (block.position != null) positionsTaken.add(block.position!);
   }
   
   for (var i = 0; i < count; i++) {
+    int generateSeed([int change = 0]) {
+      int number = int.parse("$seed$i$change");
+      return number;
+    }
+
     x++;
-    if (Random().nextInt(2) == 0) {
-      trajectory = trajectory + (trajectory == 3 ? -1 : (trajectory == -3 ? 1 : (Random().nextBool() ? 1 : -1)));
+
+    if (Random(generateSeed(14)).nextInt(15) == 0 && (i - lastSpike) > 3 && (i - lastPit) > 2) {
+      print("adding enemy at ($x,${y + 1})");
+      game.add(SimpleEnemy1(position: TilePosition(x, y + 1)));
+      addTile(BlockTile(position: TilePosition(x, y + 1), color: Colors.yellow));
+    }
+
+    if (Random(generateSeed(1)).nextInt(2) == 0) {
+      trajectory = trajectory + (trajectory == 3 ? -1 : (trajectory == -3 ? 1 : (Random(generateSeed(3)).nextBool() ? 1 : -1)));
     }
 
     if (trajectory != 0) {
       if (trajectory.abs() == 1) {
         if (i % 3 == 0) {
-          y = y + (Random().nextBool() ? 1 : -1);
+          y = y + (Random(generateSeed(2)).nextBool() ? 1 : -1);
         }
       }
 
       if (trajectory.abs() == 2) {
         if (i % 2 == 0) {
-          y + (Random().nextBool() ? 1 : -1);
+          y + (Random(generateSeed(4)).nextBool() ? 1 : -1);
         }
       }
 
       if (trajectory.abs() == 3) {
-        y + (Random().nextBool() ? 1 : -1);
+        y + (Random(generateSeed(5)).nextBool() ? 1 : -1);
       }
     }
 
-    addBlock(Block(position: BlockPosition(x, y), color: Colors.red));
+    if (Random(generateSeed(6)).nextInt(Random(generateSeed(11)).nextInt(30) + 10) == 0 && (i - lastPit) > 3) {
+      x = x + (Random(generateSeed(8)).nextInt(5) + 2);
+      lastPit = x.toInt();
+    }
+
+    if (Random(generateSeed(7)).nextInt(10) == 0 && (i - lastSpike) > 3 && (i - lastPit) > 3) {
+      int x2 = x.toInt();
+      for (var i2 = 0; i2 < Random(generateSeed(10)).nextInt(2) + 1; i2++) {
+        x2++;
+        lastSpike = x2;
+        addTile(BlockTile(position: TilePosition(x2.toDouble(), y + 1), color: Colors.red, identifiers: [BlockIdentifier.solid]));
+        addTile(BlockTile(position: TilePosition(x, y), color: Colors.green, identifiers: [BlockIdentifier.solid]));
+        x++;
+      }
+    }
+
+    if (Random(generateSeed(12)).nextInt(10) == 0 && (i - lastPlatform) > 10) {
+      int x2 = x.toInt();
+      for (var i2 = 0; i2 < Random(generateSeed(10)).nextInt(4) + 3; i2++) {
+        x2++;
+        lastPlatform = x2;
+        addTile(BlockTile(position: TilePosition(x2.toDouble(), y + (Random(generateSeed(13)).nextInt(3) + 4)), color: Colors.blue, identifiers: [BlockIdentifier.solid]));
+      }
+    }
+
+    addTile(BlockTile(position: TilePosition(x, y), color: Colors.green, identifiers: [BlockIdentifier.solid]));
   }
 
-  print("generated blocks");
-  return blocks;
-}
-
-/// Offsets have an x, a y, and a zoom.
-/// - x goes right if positive
-/// - y goes up if positive
-/// - zoom will increase size if more than 1, decrease size if less than 1, and hide everything if 0
-class Offset {
-  double x;
-  double y;
-  double zoom;
-
-  Offset(this.x, this.y, {this.zoom = 1});
+  print("generated tiles");
+  return tiles;
 }
 
 bool isShiftPressed({required List keys}) {
@@ -89,8 +150,8 @@ class MyGame extends FlameGame with KeyboardEvents, ScrollDetector {
   Future<void> onLoad() async {
     print("loading game...");
     screenHeight = size.y;
-    blocks = generateBlocks();
-    offset = Offset(0, 0, zoom: 0.25);
+    tiles = generateBlocks(game: this);
+    offset = Offset(0, 0, zoom: 1);
     super.onLoad();
   }
 
@@ -103,11 +164,11 @@ class MyGame extends FlameGame with KeyboardEvents, ScrollDetector {
   @override
   void render(Canvas canvas) {
     super.render(canvas);
-    buildBlocks(blocks, canvas: canvas, offset: offset);
+    buildBlocks(tiles, canvas: canvas, offset: offset, game: this);
   }
 
   @override
-  void update(double dt) {
+  Future<void> update(double dt) async {
     super.update(dt);
     if (_keysPressed.contains(LogicalKeyboardKey.arrowUp) || _keysPressed.contains(LogicalKeyboardKey.keyW)) {
       moveScreen(Direction.up, fast: isShiftPressed(keys: _keysPressed));
@@ -130,19 +191,15 @@ class MyGame extends FlameGame with KeyboardEvents, ScrollDetector {
   KeyEventResult onKeyEvent(KeyEvent event, Set<LogicalKeyboardKey> keysPressed) {
     if (event is KeyDownEvent) {
       _keysPressed.add(event.logicalKey);
+      if (_keysPressed.contains(LogicalKeyboardKey.keyQ)) {
+        tiles = generateBlocks(game: this);
+      }
     } else if (event is KeyUpEvent) {
       _keysPressed.remove(event.logicalKey);
     }
 
     return KeyEventResult.handled;
   }
-}
-
-enum Direction {
-  up,
-  down,
-  left,
-  right,
 }
 
 void moveScreen(Direction direction, {double speed = 2, bool fast = false}) {
@@ -155,44 +212,5 @@ void moveScreen(Direction direction, {double speed = 2, bool fast = false}) {
     case Direction.down: offset.y = offset.y - getSpeed();
     case Direction.right: offset.x = offset.x + getSpeed();
     case Direction.left: offset.x = offset.x - getSpeed();
-  }
-}
-
-class BlockComponent extends PositionComponent {
-  final Color color;
-
-  BlockComponent({
-    required this.color,
-    required Vector2 position,
-    required Vector2 size,
-  }) {
-    this.position = position;
-    this.size = size;
-  }
-
-  @override
-  void render(Canvas canvas) {
-    super.render(canvas);
-    final paint = Paint()..color = color;
-    canvas.drawRect(size.toRect(), paint);
-  }
-}
-
-class Block {
-  final BlockPosition position;
-  final Color color;
-  final double size;
-  const Block({required this.position, this.color = Colors.red, this.size = 50});
-}
-
-class BlockPosition {
-  final double x;
-  final double y;
-
-  const BlockPosition(this.x, this.y);
-  final double multiplier = 60;
-
-  Vector2 build() {
-    return Vector2(x * multiplier, (screenHeight - multiplier) - (y * multiplier));
   }
 }
